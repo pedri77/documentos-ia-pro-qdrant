@@ -1,0 +1,10 @@
+gradio==3.50.2
+sentence-transformers==2.6.1
+transformers==4.37.2
+qdrant-client==1.7.3
+huggingface-hub==0.24.6
+protobuf==4.25.3
+pymupdf
+pandas
+gspread
+google-auth
