@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+build/
+dist/
+*.egg-info/
+
+# Colab / Jupyter
+.ipynb_checkpoints/
+.cache/
+.gradio/
+
+# OS
+.DS_Store
+Thumbs.db
