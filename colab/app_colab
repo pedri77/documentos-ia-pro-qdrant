@@ -1,0 +1,127 @@
+# ===============================================================
+# 🤖 DOCUMENTOS IA PRO (con botón de limpieza Qdrant)
+# ===============================================================
+
+import subprocess, os, shutil, warnings
+warnings.filterwarnings("ignore")
+
+print("🧩 Preparando entorno universal...")
+
+# 🔧 Instalamos dependencias compatibles
+subprocess.run(["pip", "install", "-q", "--no-cache-dir",
+                "gradio==3.50.2",
+                "sentence-transformers==2.6.1",
+                "transformers==4.37.2",
+                "qdrant-client==1.7.3",
+                "huggingface-hub==0.24.6",
+                "protobuf==4.25.3",
+                "pymupdf",
+                "pandas",
+                "gspread",
+                "google-auth"])
+
+import gradio as gr
+import fitz, pandas as pd
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient, models
+from google.colab import drive
+
+# ============================================================
+# 🔐 DRIVE Y QDRANT
+# ============================================================
+drive.mount('/content/drive')
+BASE_DIR = "/content/drive/MyDrive/IA_Qdrant_n8n_stable"
+QDRANT_PATH = f"{BASE_DIR}/qdrant_storage"
+os.makedirs(BASE_DIR, exist_ok=True)
+os.makedirs(QDRANT_PATH, exist_ok=True)
+
+# Inicializar modelo y base
+model = SentenceTransformer("all-MiniLM-L6-v2")
+qdrant = QdrantClient(path=QDRANT_PATH)
+qdrant.recreate_collection(
+    collection_name="docs",
+    vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
+)
+print("✅ Modelo y Qdrant inicializados correctamente.")
+
+# ============================================================
+# 🧠 FUNCIONES PRINCIPALES
+# ============================================================
+def embed_text(texts):
+    return model.encode(texts).tolist()
+
+def ingest_pdf(file):
+    try:
+        with fitz.open(file.name) as pdf:
+            texts = [p.get_text().strip() for p in pdf if p.get_text().strip()]
+        if not texts:
+            return "⚠️ PDF vacío o sin texto."
+        vectors = embed_text(texts)
+        payloads = [{"page": i+1, "text": t, "file": os.path.basename(file.name)} for i, t in enumerate(texts)]
+        # Nota: estos IDs reinician desde 0 en cada ingesta. Para evitar sobrescribir,
+        # puedes usar IDs únicos (uuid4) o consultar el total actual y desplazar índices.
+        qdrant.upsert(
+            collection_name="docs",
+            points=models.Batch.construct(
+                ids=list(range(len(vectors))),
+                vectors=vectors,
+                payloads=payloads
+            )
+        )
+        return f"✅ {len(texts)} páginas de '{os.path.basename(file.name)}' almacenadas correctamente."
+    except Exception as e:
+        return f"❌ Error procesando PDF: {e}"
+
+def query_docs(query):
+    try:
+        q_emb = embed_text([query])[0]
+        results = qdrant.search(collection_name="docs", query_vector=q_emb, limit=3)
+        if not results:
+            return "🤷 Sin resultados relevantes."
+        out = ""
+        for r in results:
+            p = r.payload
+            out += f"📄 {p.get('file', 'Archivo desconocido')} — Página {p.get('page')}:\n{p.get('text')[:400]}...\n\n"
+        return out
+    except Exception as e:
+        return f"❌ Error en búsqueda: {e}"
+
+# ============================================================
+# 🧹 FUNCIÓN DE LIMPIEZA QDRANT
+# ============================================================
+def reset_qdrant():
+    try:
+        qdrant.delete_collection(collection_name="docs")
+        qdrant.recreate_collection(
+            collection_name="docs",
+            vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE)
+        )
+        return "🧹 Base Qdrant reiniciada correctamente. Colección vacía y lista para nuevos documentos."
+    except Exception as e:
+        return f"❌ Error al reiniciar la base: {e}"
+
+# ============================================================
+# 💬 INTERFAZ UNIVERSAL
+# ============================================================
+def main_interface(query, pdf_file):
+    msg = ""
+    if pdf_file is not None:
+        msg = ingest_pdf(pdf_file)
+    if query and query.strip():
+        return f"{msg}\n\n{query_docs(query)}"
+    return msg or "📥 Sube un PDF o escribe una pregunta."
+
+with gr.Blocks(title="🤖 Documentos IA PRO — v4.1") as app:
+    gr.Markdown("## 🤖 Documentos IA PRO — v4.1\nSube PDFs, consulta su contenido o reinicia la base Qdrant.")
+    with gr.Row():
+        query = gr.Textbox(label="Pregunta (opcional)")
+        pdf_file = gr.File(label="Sube tu PDF")
+    output = gr.Textbox(label="Resultado")
+    with gr.Row():
+        run_btn = gr.Button("🔍 Ejecutar consulta / Ingesta")
+        clean_btn = gr.Button("🗑️ Reiniciar base Qdrant")
+
+    run_btn.click(main_interface, inputs=[query, pdf_file], outputs=output)
+    clean_btn.click(reset_qdrant, inputs=[], outputs=output)
+
+app.launch(share=True)
